@@ -1,0 +1,107 @@
+report_mixed_anova_posthoc <- function(model, 
+                                       iv_between = "group", 
+                                       iv_within = "time", 
+                                       dv = "score",
+                                       print_table = TRUE,
+                                       digits = 2,
+                                       adjust = "bonferroni") {
+  if (!requireNamespace("effectsize", quietly = TRUE) ||
+      !requireNamespace("gt", quietly = TRUE) ||
+      !requireNamespace("emmeans", quietly = TRUE) ||
+      !requireNamespace("dplyr", quietly = TRUE)) {
+    stop("Please install 'effectsize', 'gt', 'emmeans', and 'dplyr' packages.")
+  }
+  
+  # === Run base ANOVA report ===
+  base_table <- report_mixed_anova(model, iv_between, iv_within, dv, print_table, digits)
+  
+  # === Get p-values from model ===
+  anova_table <- model$anova_table
+  rownames(anova_table) <- gsub(":", ":", rownames(anova_table))
+  
+  get_pval <- function(effect) {
+    if (effect %in% rownames(anova_table)) {
+      as.numeric(anova_table[effect, "Pr(>F)"])
+    } else {
+      NA
+    }
+  }
+  
+  time_p <- get_pval(iv_within)
+  group_p <- get_pval(iv_between)
+  
+  library(emmeans)
+  library(gt)
+  library(dplyr)
+  
+  # === Post hoc comparison section ===
+  cat("\n**Post hoc comparisons**\n\n")
+  
+  posthoc_tables <- list()
+  
+  if (!is.na(time_p) && time_p < 0.05) {
+    cat("Significant differences across time:\n")
+    em_time <- emmeans(model, as.formula(paste("~", iv_within)))
+    time_contrasts <- pairs(em_time, adjust = adjust) |> as.data.frame()
+    
+    sig_time <- time_contrasts[time_contrasts$p.value < 0.05, ]
+    if (nrow(sig_time) > 0) {
+      for (i in 1:nrow(sig_time)) {
+        row <- sig_time[i, ]
+        cat(paste0("- ", row$contrast, ", *p* = ",
+                   formatC(row$p.value, digits = 3, format = "f"), "\n"))
+      }
+      
+      required_cols <- c("contrast", "estimate", "SE", "df", "lower.CL", "upper.CL", "p.value")
+      available_cols <- intersect(required_cols, names(time_contrasts))
+      
+      tbl_time <- time_contrasts |>
+        select(all_of(available_cols)) |>
+        rename_with(~ gsub("\\.", " ", .), all_of(available_cols)) |>
+        gt() |>
+        tab_header(title = md("**Post Hoc Comparisons for Time**")) |>
+        fmt_number(columns = where(is.numeric), decimals = digits) |>
+        tab_source_note(md(paste0("p-values adjusted using ", adjust, " correction.")))
+      
+      posthoc_tables$time <- tbl_time
+    } else {
+      cat("  No pairwise time differences were significant.\n\n")
+    }
+  }
+  
+  if (!is.na(group_p) && group_p < 0.05) {
+    cat("Significant differences between groups:\n")
+    em_group <- emmeans(model, as.formula(paste("~", iv_between)))
+    group_contrasts <- pairs(em_group, adjust = adjust) |> as.data.frame()
+    
+    sig_group <- group_contrasts[group_contrasts$p.value < 0.05, ]
+    if (nrow(sig_group) > 0) {
+      for (i in 1:nrow(sig_group)) {
+        row <- sig_group[i, ]
+        cat(paste0("- ", row$contrast, ", *p* = ",
+                   formatC(row$p.value, digits = 3, format = "f"), "\n"))
+      }
+      
+      required_cols <- c("contrast", "estimate", "SE", "df", "lower.CL", "upper.CL", "p.value")
+      available_cols <- intersect(required_cols, names(group_contrasts))
+      
+      tbl_group <- group_contrasts |>
+        select(all_of(available_cols)) |>
+        rename_with(~ gsub("\\.", " ", .), all_of(available_cols)) |>
+        gt() |>
+        tab_header(title = md("**Post Hoc Comparisons for Group**")) |>
+        fmt_number(columns = where(is.numeric), decimals = digits) |>
+        tab_source_note(md(paste0("p-values adjusted using ", adjust, " correction.")))
+      
+      posthoc_tables$group <- tbl_group
+    } else {
+      cat("  No pairwise group differences were significant.\n\n")
+    }
+  }
+  
+  invisible(list(
+    anova_table = base_table,
+    posthoc_time = posthoc_tables$time,
+    posthoc_group = posthoc_tables$group
+  ))
+}
