@@ -1,0 +1,115 @@
+report_mixed_anova <- function(model, 
+                               iv_between = "group", 
+                               iv_within = "time", 
+                               dv = "score",
+                               print_table = TRUE,
+                               digits = 2) {
+  if (!requireNamespace("effectsize", quietly = TRUE) ||
+      !requireNamespace("gt", quietly = TRUE)) {
+    stop("Please install 'effectsize' and 'gt' packages.")
+  }
+  
+  anova_table <- model$anova_table
+  rownames(anova_table) <- gsub(":", ":", rownames(anova_table))
+  omega <- effectsize::omega_squared(model, partial = TRUE)
+  
+  get_effect_info <- function(effect_name) {
+    if (!(effect_name %in% rownames(anova_table))) return(NULL)
+    row <- anova_table[effect_name, ]
+    omega_row <- omega[omega$Parameter == effect_name, ]
+    
+    list(
+      Effect = effect_name,
+      df1 = round(as.numeric(row[["num Df"]]), digits),
+      df2 = round(as.numeric(row[["den Df"]]), digits),
+      F = round(as.numeric(row[["F"]]), digits),
+      p = ifelse(row[["Pr(>F)"]] < .001, "< .001",
+                 format(round(row[["Pr(>F)"]], 3), nsmall = 3)),
+      omega2 = format(round(omega_row$Omega2_partial, 3), nsmall = 3),
+      pval = as.numeric(row[["Pr(>F)"]]),
+      sig = ifelse(row[["Pr(>F)"]] < .001, "***",
+                   ifelse(row[["Pr(>F)"]] < .01, "**",
+                          ifelse(row[["Pr(>F)"]] < .05, "*", "")))
+    )
+  }
+  
+  effects <- rownames(anova_table)
+  results <- lapply(effects, get_effect_info)
+  df <- do.call(rbind, lapply(results, as.data.frame))
+  
+  # Identify effects
+  interaction <- df[grepl(":", df$Effect), ][1, ]
+  time_main <- df[df$Effect == iv_within, ][1, ]
+  group_main <- df[df$Effect == iv_between, ][1, ]
+  
+  # Time labels
+  time_levels <- levels(model$data[[iv_within]])
+  num_time_points <- length(time_levels)
+  time_names <- paste(time_levels, collapse = ", ")
+  if (num_time_points > 1) {
+    time_names <- paste(paste(time_levels[1:(num_time_points - 1)], collapse = ", "),
+                        "and", time_levels[num_time_points])
+  }
+  
+  # Labels
+  between_label <- gsub("_", " ", iv_between)
+  within_label <- gsub("_", " ", iv_within)
+  dv_label <- gsub("_", " ", dv)
+  
+  # Time text
+  time_text <- if (time_main$pval < .05) {
+    paste0("There was a significant main effect of ", within_label,
+           ", *F*(", time_main$df1, ", ", time_main$df2,
+           ") = ", time_main$F, ", *p* ", time_main$p,
+           ", partial omega squared = ", time_main$omega2,
+           ", with both groups showing a change across the time points ", time_names, ".")
+  } else {
+    paste0("There was no significant main effect of ", within_label,
+           ", *F*(", time_main$df1, ", ", time_main$df2,
+           ") = ", time_main$F, ", *p* ", time_main$p,
+           ", partial omega squared = ", time_main$omega2, ".")
+  }
+  
+  # Group text
+  group_text <- paste0(" The main effect of ", between_label, " was ",
+                       ifelse(group_main$pval < .05, "significant", "not significant"),
+                       ", *F*(", group_main$df1, ", ", group_main$df2,
+                       ") = ", group_main$F, ", *p* ", group_main$p,
+                       ", partial omega squared = ", group_main$omega2,
+                       ", suggesting ",
+                       ifelse(group_main$pval < .05,
+                              "differences between groups.",
+                              "no overall difference between groups."))
+  
+  # Report
+  paragraph <- paste0(
+    "A mixed between-within subjects analysis of variance was conducted to assess the impact of different levels of ",
+    between_label, " on participants’ scores on the ", tools::toTitleCase(dv_label),
+    " across ", num_time_points, " time points (", time_names, ").\n\n",
+    "There was ", ifelse(interaction$pval < .05, "a significant", "no significant"),
+    " interaction between ", between_label, " and ", within_label,
+    ", *F*(", interaction$df1, ", ", interaction$df2,
+    ") = ", interaction$F, ", *p* ", interaction$p,
+    ", partial omega squared = ", interaction$omega2, ". ",
+    time_text,
+    group_text
+  )
+  
+  cat(paragraph, "\n\n")
+  
+  # Table
+  if (print_table) {
+    library(gt)
+    results_df <- df |>
+      dplyr::rename(`df₁` = df1, `df₂` = df2, `F` = F, `p` = p, `ω²` = omega2, `Sig.` = sig)
+    
+    return(
+      results_df |>
+        gt() |>
+        tab_header(title = md("**Table X**"), subtitle = md("*ANOVA Summary Table*")) |>
+        fmt_number(columns = c("df₁", "df₂", "F"), decimals = digits) |>
+        cols_label(Effect = "Effect", `df₁` = "df₁", `df₂` = "df₂", `F` = "F", `p` = "p", `ω²` = "ω²", `Sig.` = "") |>
+        tab_source_note(md("Note. ω² = partial omega squared. Significance codes: *** p < .001, ** p < .01, * p < .05"))
+    )
+  }
+}
